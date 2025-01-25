@@ -259,7 +259,7 @@ start_branch_jira() {
   done
 
   local BRANCH_NAME=$(curl -sSL \
-    -X GET \
+    --request GET \
     --url "${MECHA_GH_START_JIRA_BASE_URL}/rest/api/2/issue/${JIRA_ISSUE_ID}" \
     --user "${MECHA_GH_START_JIRA_EMAIL}:${MECHA_GH_START_JIRA_TOKEN}" \
     --header 'Accept: application/json' | \
@@ -281,12 +281,11 @@ check_command() {
 }
 
 slugify() {
-  echo "${1}" | \
-    iconv -t ascii//TRANSLIT | \
-    tr "[:upper:]" "[:lower:]" | \
-    sed -r 's/[~\^]+//g' | \
-    sed -r 's/[^a-zA-Z0-9]+/-/g' | \
-    sed -r 's/^-+|-+$//g'
+  iconv -t ascii//TRANSLIT | \
+  tr "[:upper:]" "[:lower:]" | \
+  sed -r 's/[~\^]+//g' | \
+  sed -r 's/[^a-zA-Z0-9]+/-/g' | \
+  sed -r 's/^-+|-+$//g'
 }
 
 export -f slugify
