@@ -1,0 +1,295 @@
+#!/bin/sh
+
+set -e
+set -o errexit -o nounset
+
+main() {
+  check_command "curl"
+  check_command "jq"
+  check_command "iconv"
+  check_command "tr"
+  check_command "sed"
+
+  local TRACKERS="redmine, rm, r, github, gh, g, jira, ji, j"
+  local TRACKER_NAME="${1}"
+
+  shift
+
+  case "${TRACKER_NAME}" in
+    redmine|rm|r)
+      start_branch_redmine "$@"
+      ;;
+    github|gh|g)
+      start_branch_github "$@"
+      ;;
+    jira|ji|j)
+      start_branch_jira "$@"
+      ;;
+    *)
+      printf "%s\n%s\n" "Error: unsupported tracker-name '${TRACKER_NAME}' (Allowed: ${TRACKERS})" "Usage: gh start <tracker-name> ..."
+      exit 1
+      ;;
+  esac
+}
+
+start_branch_redmine() {
+  local REDMINE_USAGE="Usage: gh start [redmine|rm|r] <issue-id> [--branch-prefix] [--type feature|release|hotfix]"
+  local REDMINE_ISSUE_ID="${1}"
+  local REDMINE_ISSUE_TYPE=feature
+  local REDMINE_BRANCH_PREFIX=""
+
+  # Check MECHA_GH_START_REDMINE_TOKEN is set
+  if [ -z "${MECHA_GH_START_REDMINE_TOKEN}" ]; then
+    echo "You need to set a MECHA_GH_START_REDMINE_TOKEN to use this command."
+    exit 1
+  fi
+
+  # Check redmine issue id is passed as first argument
+  if [ -z "${REDMINE_ISSUE_ID}" ]; then
+    printf "%s\n%s\n" "Error: missing issue-id" "${REDMINE_USAGE}"
+    exit 1
+  fi
+
+  # Check REDMINE_ISSUE_ID is actually a number
+  if ! [[ "${REDMINE_ISSUE_ID}" =~ ^[0-9]+$ ]]; then
+    printf "%s\n%s\n" "Error: issue-id is not a number" "${REDMINE_USAGE}"
+    exit 1
+  fi
+
+  # Remove the issue-id from the arguments
+  shift
+
+  # Parse optional flags
+  while [[ "$#" -gt 0 ]]; do
+    case "${1}" in
+      --branch-prefix)
+        REDMINE_BRANCH_PREFIX="rm-"
+        shift
+        ;;
+
+      --type)
+        if [ -z "${2}" ]; then
+          printf "%s\n%s\n" "Error: missing issue-type" "${REDMINE_USAGE}"
+          exit 1
+        fi
+        case "${2}" in
+          feature|release|hotfix)
+            REDMINE_ISSUE_TYPE="${2}"
+            ;;
+          *)
+            printf "%s\n%s\n" "Error: missing issue-type" "${REDMINE_USAGE}"
+            exit 1
+            ;;
+        esac
+
+        shift
+        ;;
+
+      *)
+        printf "%s\n" "${REDMINE_USAGE}"
+        exit 1
+        ;;
+    esac
+
+    shift
+  done
+
+  # Fetch data from Redmine
+  local BRANCH_NAME=$(curl -sSL \
+    -X GET \
+    -H "X-Redmine-API-Key: ${MECHA_GH_START_REDMINE_TOKEN}" \
+    -H "Content-Type: application/json" \
+    "${MECHA_GH_START_REDMINE_BASE_URL}/issues.json?issue_id=${REDMINE_ISSUE_ID}" | \
+      jq -M -r '.issues[0].subject' | \
+      slugify
+  )
+
+  # Create the new branch
+  git switch -c "${REDMINE_ISSUE_TYPE}/${REDMINE_BRANCH_PREFIX}${REDMINE_ISSUE_ID}-${BRANCH_NAME}"
+}
+
+start_branch_github() {
+  local GITHUB_USAGE="Usage: gh start [github|gh|g] <issue-id> [--branch-prefix] [--type feature|release|hotfix]"
+  local GITHUB_ISSUE_ID="${1}"
+  local GITHUB_ISSUE_TYPE=feature
+  local GITHUB_BRANCH_PREFIX=""
+
+  # Check MECHA_GH_START_GITHUB_TOKEN is set
+  if [ -z "${MECHA_GH_START_GITHUB_TOKEN}" ]; then
+    echo "You need to set a MECHA_GH_START_GITHUB_TOKEN to use this command."
+    exit 1
+  fi
+
+  # Check github issue id is passed as first argument
+  if [ -z "${GITHUB_ISSUE_ID}" ]; then
+    printf "%s\n%s\n" "Error: missing issue-id" "${GITHUB_USAGE}"
+    exit 1
+  fi
+
+  # Check GITHUB_ISSUE_ID is actually a number
+  if ! [[ "${GITHUB_ISSUE_ID}" =~ ^[0-9]+$ ]]; then
+    printf "%s\n%s\n" "Error: issue-id is not a number" "${GITHUB_USAGE}"
+    exit 1
+  fi
+
+  # Remove the issue-id from the arguments
+  shift
+
+  # Parse optional flags
+  while [[ "$#" -gt 0 ]]; do
+      case "${1}" in
+      --branch-prefix)
+        GITHUB_BRANCH_PREFIX="gh-"
+        shift
+        ;;
+
+      --type)
+        if [ -z "${2}" ]; then
+          printf "%s\n%s\n" "Error: missing issue-type" "${GITHUB_USAGE}"
+          exit 1
+        fi
+        case "${2}" in
+          feature|release|hotfix)
+            GITHUB_ISSUE_TYPE="${2}"
+            ;;
+          *)
+            printf "%s\n%s\n" "Error: missing issue-type" "${GITHUB_USAGE}"
+            exit 1
+            ;;
+        esac
+        shift
+        ;;
+
+      *)
+        printf "%s\n" "${GITHUB_USAGE}"
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
+  local GITHUB_REPOSITORY=$(git remote -v | head -n 1 | cut -f 2 | cut -d ' ' -f 1 | rev | cut -d '/' -f1,2 | rev)
+
+  # Fetch data from Github
+  local BRANCH_NAME=$(curl -sSL \
+    -X GET \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer ${MECHA_GH_START_GITHUB_TOKEN}" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    -H "Content-Type: application/json" \
+    "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${GITHUB_ISSUE_ID}" | \
+      jq -M -r '.title' | \
+      slugify
+  )
+
+  # Create the new branch
+  git switch -c "${GITHUB_ISSUE_TYPE}/${GITHUB_BRANCH_PREFIX}${GITHUB_ISSUE_ID}-${BRANCH_NAME}"
+}
+
+start_branch_jira() {
+  local JIRA_USAGE="Usage: gh start [jira|ji|j] <issue-id> [--branch-prefix] [--type feature|release|hotfix]"
+  local JIRA_ISSUE_ID="${1}"
+  local JIRA_ISSUE_TYPE=feature
+  local JIRA_BRANCH_PREFIX=""
+
+  # Check MECHA_GH_START_JIRA_EMAIL is set
+  if [ -z "${MECHA_GH_START_JIRA_EMAIL}" ]; then
+  echo "You need to set a MECHA_GH_START_JIRA_EMAIL to use this command."
+    exit 1
+  fi
+
+  # Check MECHA_GH_START_JIRA_TOKEN is set
+  if [ -z "${MECHA_GH_START_JIRA_TOKEN}" ]; then
+    echo "You need to set a MECHA_GH_START_JIRA_TOKEN to use this command."
+    exit 1
+  fi
+
+  # Check MECHA_GH_START_JIRA_BASE_URL is set
+  if [ -z "${MECHA_GH_START_JIRA_BASE_URL}" ]; then
+    echo "You need to set a MECHA_GH_START_JIRA_BASE_URL to use this command."
+    exit 1
+  fi
+
+  # Check jira issue id is passed as first argument
+  if [ -z "${JIRA_ISSUE_ID}" ]; then
+    printf "%s\n%s\n" "Error: missing issue-id" "${JIRA_USAGE}"
+    exit 1
+  fi
+
+  # Check JIRA_ISSUE_ID is valid
+  if ! [[ "${JIRA_ISSUE_ID}" =~ ^[A-Z0-9]+-[0-9]+$ ]]; then
+    printf "%s\n%s\n" "Error: issue-id is not a number" "${JIRA_USAGE}"
+    exit 1
+  fi
+
+  # Remove the issue-id from the arguments
+  shift
+
+  # Parse optional flags
+  while [[ "$#" -gt 0 ]]; do
+      case "${1}" in
+      --branch-prefix)
+        JIRA_BRANCH_PREFIX="ji-"
+        shift
+        ;;
+
+      --type)
+        if [ -z "${2}" ]; then
+          printf "%s\n%s\n" "Error: missing issue-type" "${JIRA_USAGE}"
+          exit 1
+        fi
+        case "${2}" in
+          feature|release|hotfix)
+            JIRA_ISSUE_TYPE="${2}"
+            ;;
+          *)
+            printf "%s\n%s\n" "Error: missing issue-type" "${JIRA_USAGE}"
+            exit 1
+            ;;
+        esac
+        shift
+        ;;
+
+      *)
+        printf "%s\n" "${JIRA_USAGE}"
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
+  local BRANCH_NAME=$(curl -sSL \
+    -X GET \
+    --url "${MECHA_GH_START_JIRA_BASE_URL}/rest/api/2/issue/${JIRA_ISSUE_ID}" \
+    --user "${MECHA_GH_START_JIRA_EMAIL}:${MECHA_GH_START_JIRA_TOKEN}" \
+    --header 'Accept: application/json' | \
+      jq -M -r '.fields.summary' | \
+      slugify
+  )
+
+  # Create the new branch
+  git switch -c "${JIRA_ISSUE_TYPE}/${JIRA_BRANCH_PREFIX}${JIRA_ISSUE_ID}-${BRANCH_NAME}"
+}
+
+check_command() {
+  local COMMAND_NAME="${1}"
+
+  if ! command -v "${COMMAND_NAME}" &> /dev/null; then
+    echo "Error: Command '${COMMAND_NAME}' not found." >&2
+    exit 1
+  fi
+}
+
+slugify() {
+  echo "${1}" | \
+    iconv -t ascii//TRANSLIT | \
+    tr "[:upper:]" "[:lower:]" | \
+    sed -r 's/[~\^]+//g' | \
+    sed -r 's/[^a-zA-Z0-9]+/-/g' | \
+    sed -r 's/^-+|-+$//g'
+}
+
+export -f slugify
+
+main "$@"
+exit 0
