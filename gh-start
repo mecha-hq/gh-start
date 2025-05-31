@@ -168,7 +168,7 @@ start_branch_github() {
     shift
   done
 
-  local GITHUB_REPOSITORY=$(git remote -v | head -n 1 | cut -f 2 | cut -d ' ' -f 1 | rev | cut -d '/' -f1,2 | rev)
+  local GITHUB_REPOSITORY=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
   # Fetch data from Github
   local BRANCH_NAME=$(curl -sSL \
